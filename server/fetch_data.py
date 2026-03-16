@@ -19,8 +19,8 @@ from datetime import datetime, timezone
 # ──────────────────────────────────────────────────────────────────────
 MAX_STOCKS_PER_REGION = 100
 EXCLUDED_SECTORS = {"Utilities", "Financial Services", "Financial"}
-MIN_MARKET_CAP = 50_000_000
-MAX_MARKET_CAP = 300_000_000
+MIN_MARKET_CAP = 1_000_000_000
+MAX_MARKET_CAP = 50_000_000_000
 MIN_PRICE = 0.10
 MIN_AVG_VOLUME = 10_000
 
