@@ -1,9 +1,6 @@
-import { createRoot } from "react-dom/client";
-import App from "./App";
-import "./index.css";
-
-if (!window.location.hash) {
-  window.location.hash = "#/";
+export default {
+  plugins: {
+    tailwindcss: {},
+    autoprefixer: {},
+  },
 }
-
-createRoot(document.getElementById("root")!).render(<App />);

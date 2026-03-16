@@ -1,14 +1,14 @@
-export function PerplexityAttribution() {
-  return (
-    <footer className="w-full py-4 text-center text-xs text-muted-foreground">
-      <a
-        href="https://www.perplexity.ai/computer"
-        target="_blank"
-        rel="noopener noreferrer"
-        className="hover:text-foreground transition-colors"
-      >
-        Created with Perplexity Computer
-      </a>
-    </footer>
-  );
+import { defineConfig } from "drizzle-kit";
+
+if (!process.env.DATABASE_URL) {
+  throw new Error("DATABASE_URL, ensure the database is provisioned");
 }
+
+export default defineConfig({
+  out: "./migrations",
+  schema: "./shared/schema.ts",
+  dialect: "postgresql",
+  dbCredentials: {
+    url: process.env.DATABASE_URL,
+  },
+});
