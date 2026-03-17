@@ -275,5 +275,98 @@ export async function registerRoutes(
     }
   });
 
+  // Backtest: compare historical returns by bucket tier
+  app.get("/api/backtest", (_req, res) => {
+    const stocks = storage.getAllStocks();
+
+    // Define bucket tiers
+    const tiers: Record<string, { label: string; buckets: number[]; color: string }> = {
+      top: { label: "Top (8-10)", buckets: [8, 9, 10], color: "hsl(150, 50%, 42%)" },
+      mid: { label: "Middle (4-7)", buckets: [4, 5, 6, 7], color: "hsl(40, 50%, 55%)" },
+      bottom: { label: "Bottom (1-3)", buckets: [1, 2, 3], color: "hsl(0, 70%, 55%)" },
+    };
+
+    type TierStats = {
+      label: string;
+      color: string;
+      count: number;
+      avg13W: number | null;
+      avg26W: number | null;
+      avg52W: number | null;
+      median13W: number | null;
+      median26W: number | null;
+      median52W: number | null;
+      pctPositive13W: number | null;
+      pctPositive26W: number | null;
+      pctPositive52W: number | null;
+      bestStock: { ticker: string; return52W: number } | null;
+      worstStock: { ticker: string; return52W: number } | null;
+      stocks: Array<{ ticker: string; name: string; bucket: number; ret13W: number | null; ret26W: number | null; ret52W: number | null }>;
+    };
+
+    function median(arr: number[]): number | null {
+      if (arr.length === 0) return null;
+      const sorted = [...arr].sort((a, b) => a - b);
+      const mid = Math.floor(sorted.length / 2);
+      return sorted.length % 2 !== 0 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+    }
+
+    function avg(arr: number[]): number | null {
+      if (arr.length === 0) return null;
+      return arr.reduce((s, v) => s + v, 0) / arr.length;
+    }
+
+    const result: Record<string, TierStats> = {};
+
+    for (const [key, tier] of Object.entries(tiers)) {
+      const tierStocks = stocks.filter((s) => s.bucket !== null && tier.buckets.includes(s.bucket));
+
+      const vals13W = tierStocks.map((s) => s.priceChange13W).filter((v): v is number => v !== null);
+      const vals26W = tierStocks.map((s) => s.priceChange26W).filter((v): v is number => v !== null);
+      const vals52W = tierStocks.map((s) => s.priceChange52W).filter((v): v is number => v !== null);
+
+      // Find best/worst by 52W return
+      let bestStock: TierStats["bestStock"] = null;
+      let worstStock: TierStats["worstStock"] = null;
+      for (const s of tierStocks) {
+        if (s.priceChange52W !== null) {
+          if (!bestStock || s.priceChange52W > bestStock.return52W) {
+            bestStock = { ticker: s.ticker, return52W: s.priceChange52W };
+          }
+          if (!worstStock || s.priceChange52W < worstStock.return52W) {
+            worstStock = { ticker: s.ticker, return52W: s.priceChange52W };
+          }
+        }
+      }
+
+      result[key] = {
+        label: tier.label,
+        color: tier.color,
+        count: tierStocks.length,
+        avg13W: avg(vals13W),
+        avg26W: avg(vals26W),
+        avg52W: avg(vals52W),
+        median13W: median(vals13W),
+        median26W: median(vals26W),
+        median52W: median(vals52W),
+        pctPositive13W: vals13W.length > 0 ? (vals13W.filter((v) => v > 0).length / vals13W.length) * 100 : null,
+        pctPositive26W: vals26W.length > 0 ? (vals26W.filter((v) => v > 0).length / vals26W.length) * 100 : null,
+        pctPositive52W: vals52W.length > 0 ? (vals52W.filter((v) => v > 0).length / vals52W.length) * 100 : null,
+        bestStock,
+        worstStock,
+        stocks: tierStocks.map((s) => ({
+          ticker: s.ticker,
+          name: s.name,
+          bucket: s.bucket!,
+          ret13W: s.priceChange13W,
+          ret26W: s.priceChange26W,
+          ret52W: s.priceChange52W,
+        })),
+      };
+    }
+
+    res.json(result);
+  });
+
   return httpServer;
 }
