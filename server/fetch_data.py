@@ -3,6 +3,10 @@
 SQGLP+ST Yahoo Finance Data Fetcher
 Fetches live stock data and computes all metrics needed for the scoring engine.
 Outputs JSON to stdout for the Node.js backend to consume.
+
+Sector filtering is done ONLY during individual stock fetch (yf.Ticker.info),
+NOT in the screener query, because EquityQuery sector syntax varies across
+yfinance versions and can fail silently.
 """
 
 import yfinance as yf
@@ -11,13 +15,14 @@ import json
 import sys
 import math
 import time
+import traceback
 import concurrent.futures
 from datetime import datetime, timezone
 
 # ──────────────────────────────────────────────────────────────────────
 # CONFIG
 # ──────────────────────────────────────────────────────────────────────
-MAX_STOCKS_PER_REGION = 100
+MAX_STOCKS_PER_REGION = 250  # fetch more to compensate for sector filtering
 # Only include these sectors (Yahoo Finance labels)
 # "Consumer Cyclical" = Consumer Discretionary (leisure, retail, hotels, restaurants, autos)
 # "Industrials" = Transport (airlines, railroads, logistics, shipping)
@@ -27,6 +32,8 @@ MIN_MARKET_CAP = 1_000_000_000
 MAX_MARKET_CAP = 50_000_000_000
 MIN_PRICE = 0.10
 MIN_AVG_VOLUME = 10_000
+TARGET_STOCKS = 100  # stop after collecting this many matching stocks
+
 
 REGION_MAP = {
     "US": ["us"],
@@ -70,47 +77,43 @@ def clean_val(val):
 
 # ──────────────────────────────────────────────────────────────────────
 # STEP 1: Discover stock universe via Yahoo Finance screener
+#         NO sector filter here — just market cap, price, volume
 # ──────────────────────────────────────────────────────────────────────
 def get_universe_tickers(country_codes, region_label):
     all_tickers = []
 
     for code in country_codes:
         try:
-            filters = [
+            # Simple filters only — no sector filter (applied later during fetch)
+            q = EquityQuery('and', [
                 EquityQuery('gt', ['intradaymarketcap', MIN_MARKET_CAP]),
                 EquityQuery('lt', ['intradaymarketcap', MAX_MARKET_CAP]),
                 EquityQuery('gt', ['intradayprice', MIN_PRICE]),
                 EquityQuery('gt', ['avgdailyvol3m', MIN_AVG_VOLUME]),
                 EquityQuery('eq', ['region', code]),
-            ]
-            # Add sector filter if INCLUDED_SECTORS is set
-            if INCLUDED_SECTORS:
-                sector_list = list(INCLUDED_SECTORS)
-                if len(sector_list) == 1:
-                    filters.append(EquityQuery('eq', ['sector', sector_list[0]]))
-                else:
-                    filters.append(EquityQuery('or', [
-                        EquityQuery('eq', ['sector', s]) for s in sector_list
-                    ]))
-            q = EquityQuery('and', filters)
+            ])
 
             tickers_for_country = []
-            for offset in range(0, 500, 25):
-                result = yf.screen(q, count=25, offset=offset)
-                quotes = result.get('quotes', [])
-                for item in quotes:
-                    sym = item.get('symbol', '')
-                    sector = item.get('sectorDisp', '') or item.get('sector', '')
-                    if sym:  # sector filtering done at API level via EquityQuery
-                        tickers_for_country.append(sym)
-                if len(quotes) < 25:
+            for offset in range(0, 1000, 25):
+                try:
+                    result = yf.screen(q, count=25, offset=offset)
+                    quotes = result.get('quotes', [])
+                    for item in quotes:
+                        sym = item.get('symbol', '')
+                        if sym:
+                            tickers_for_country.append(sym)
+                    if len(quotes) < 25:
+                        break
+                    time.sleep(0.05)
+                except Exception as page_err:
+                    log(f"  {code.upper()} page {offset} error: {page_err}")
                     break
-                time.sleep(0.05)
 
-            log(f"  {code.upper()}: {len(tickers_for_country)} tickers")
+            log(f"  {code.upper()}: {len(tickers_for_country)} tickers from screener")
             all_tickers.extend(tickers_for_country)
         except Exception as e:
-            log(f"  {code.upper()} error: {e}")
+            log(f"  {code.upper()} screener error: {e}")
+            log(f"  traceback: {traceback.format_exc()}")
 
     # Deduplicate and cap
     seen = set()
@@ -236,6 +239,7 @@ def compute_piotroski(info, bs, inc, cf):
 
 # ──────────────────────────────────────────────────────────────────────
 # STEP 4: Fetch all data for one ticker
+#         SECTOR FILTERING HAPPENS HERE via yf.Ticker.info['sectorDisp']
 # ──────────────────────────────────────────────────────────────────────
 def fetch_stock_data(ticker_sym, region_label):
     try:
@@ -246,8 +250,13 @@ def fetch_stock_data(ticker_sym, region_label):
             return None
 
         sector = info.get('sectorDisp', '') or info.get('sector', '')
-        # Sector filtering is handled by the EquityQuery in get_universe_tickers
-        # Only skip if sector is in the hard-exclude list (empty by default)
+
+        # ─── SECTOR FILTER ───
+        # This is the primary sector filter — applied here because
+        # yf.Ticker.info reliably returns sectorDisp across all yfinance versions
+        if INCLUDED_SECTORS and sector not in INCLUDED_SECTORS:
+            return None
+
         if EXCLUDED_SECTORS and sector in EXCLUDED_SECTORS:
             return None
 
@@ -356,6 +365,10 @@ def fetch_stock_data(ticker_sym, region_label):
 def main():
     region_arg = sys.argv[1] if len(sys.argv) > 1 else "ALL"
 
+    log(f"Starting fetch for region={region_arg}")
+    log(f"Config: sectors={INCLUDED_SECTORS}, marketCap={MIN_MARKET_CAP}-{MAX_MARKET_CAP}")
+    log(f"yfinance version: {yf.__version__}")
+
     regions = {}
     if region_arg in ("ALL", "US"): regions["US"] = REGION_MAP["US"]
     if region_arg in ("ALL", "CA"): regions["CA"] = REGION_MAP["CA"]
@@ -365,19 +378,27 @@ def main():
 
     for label, codes in regions.items():
         log(f"Discovering {label} universe...")
-        tickers = get_universe_tickers(codes, label)
-        if not tickers:
+        try:
+            tickers = get_universe_tickers(codes, label)
+        except Exception as e:
+            log(f"  {label} discovery FAILED: {e}")
+            log(f"  traceback: {traceback.format_exc()}")
             continue
 
-        log(f"Fetching data for {len(tickers)} {label} stocks...")
+        if not tickers:
+            log(f"  {label}: no tickers found, skipping")
+            continue
+
+        log(f"Fetching data for {len(tickers)} {label} stocks (sector filter applied per-stock)...")
         results = []
+        skipped_sector = 0
         with concurrent.futures.ThreadPoolExecutor(max_workers=5) as pool:
             futures = {pool.submit(fetch_stock_data, sym, label): sym for sym in tickers}
             done = 0
             for f in concurrent.futures.as_completed(futures):
                 done += 1
                 if done % 25 == 0:
-                    log(f"  {label}: {done}/{len(tickers)} done")
+                    log(f"  {label}: {done}/{len(tickers)} processed, {len(results)} matched sectors")
                 try:
                     r = f.result()
                     if r:
@@ -385,8 +406,12 @@ def main():
                 except:
                     pass
 
-        log(f"  {label}: {len(results)} stocks fetched successfully")
+        log(f"  {label}: {len(results)} stocks matched sectors out of {len(tickers)} processed")
         all_stocks.extend(results)
+
+    # Cap at TARGET_STOCKS
+    if len(all_stocks) > TARGET_STOCKS:
+        all_stocks = all_stocks[:TARGET_STOCKS]
 
     log(f"TOTAL: {len(all_stocks)} stocks across all regions")
 
