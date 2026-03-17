@@ -4,7 +4,7 @@ import { storage } from "./storage";
 import { scoreStocks } from "./scoring";
 import { generateSeedData } from "./seedData";
 import type { FactorWeights, StockData } from "@shared/schema";
-import { execFile } from "child_process";
+import { spawn } from "child_process";
 import path from "path";
 
 // Default weights matching the SQGLP+ST system
@@ -44,73 +44,90 @@ function fetchLiveData(region: string = "ALL"): Promise<StockData[]> {
     };
 
     const pythonScript = path.join(__dirname, "..", "server", "fetch_data.py");
-    // Try multiple Python paths
     const pythonPaths = ["python3", "python", "/usr/bin/python3"];
 
     function tryPython(index: number) {
       if (index >= pythonPaths.length) {
-        fetchStatus = { state: "error", message: "Python not found", progress: 0 };
+        fetchStatus = { state: "error", message: "Python not found. Install Python 3.", progress: 0 };
         return reject(new Error("Python not found"));
       }
 
-      console.log(`[FETCH] Trying ${pythonPaths[index]} ${pythonScript} ${region}`);
-      console.log(`[FETCH] cwd: ${path.join(__dirname, "..")}`);
-      const proc = execFile(
-        pythonPaths[index],
-        [pythonScript, region],
-        {
-          maxBuffer: 50 * 1024 * 1024, // 50MB buffer
-          timeout: 300_000, // 5 min timeout
-          cwd: path.join(__dirname, ".."),
-        },
-        (error, stdout, stderr) => {
-          console.log(`[FETCH] stderr: ${stderr?.slice(0, 500)}`);
-          console.log(`[FETCH] stdout length: ${stdout?.length}, error: ${error?.message}`);
-          // Log progress from stderr
-          if (stderr) {
-            const lines = stderr.split("\n").filter(Boolean);
-            const lastLine = lines[lines.length - 1] || "";
-            fetchStatus.message = lastLine.replace("[FETCH] ", "");
+      const pythonCmd = pythonPaths[index];
+      const cwd = path.join(__dirname, "..");
+      console.log(`[FETCH] Trying: ${pythonCmd} ${pythonScript} ${region}`);
+      console.log(`[FETCH] cwd: ${cwd}`);
 
-            // Estimate progress from log messages
-            if (lastLine.includes("Discovering")) fetchStatus.progress = 20;
-            else if (lastLine.includes("Fetching data")) fetchStatus.progress = 40;
-            else if (lastLine.includes("done")) fetchStatus.progress = 70;
-            else if (lastLine.includes("TOTAL")) fetchStatus.progress = 90;
-          }
+      const proc = spawn(pythonCmd, [pythonScript, region], {
+        cwd,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
 
-          if (error) {
-            // If python3 not found, try next
-            if (error.message?.includes("ENOENT") || error.message?.includes("not found")) {
-              return tryPython(index + 1);
-            }
-            fetchStatus = {
-              state: "error",
-              message: `Fetch failed: ${error.message}`,
-              progress: 0,
-            };
-            return reject(error);
-          }
+      let stdout = "";
+      let stderr = "";
 
-          try {
-            const data = JSON.parse(stdout);
-            const stocks: StockData[] = data.stocks || [];
-            fetchStatus = {
-              state: "done",
-              message: `Fetched ${stocks.length} stocks`,
-              progress: 100,
-            };
-            resolve(stocks);
-          } catch (e) {
-            fetchStatus = {
-              state: "error",
-              message: "Failed to parse response",
-              progress: 0,
-            };
-            reject(new Error("Failed to parse Python output"));
-          }
+      proc.stdout.on("data", (chunk: Buffer) => {
+        stdout += chunk.toString();
+      });
+
+      proc.stderr.on("data", (chunk: Buffer) => {
+        const text = chunk.toString();
+        stderr += text;
+        // Stream each line to console in real time
+        text.split("\n").filter(Boolean).forEach((line: string) => {
+          console.log(`[PY] ${line}`);
+          const clean = line.replace("[FETCH] ", "");
+          fetchStatus.message = clean;
+          if (line.includes("Discovering")) fetchStatus.progress = 20;
+          else if (line.includes("Fetching data")) fetchStatus.progress = 40;
+          else if (line.includes("processed")) fetchStatus.progress = 60;
+          else if (line.includes("TOTAL")) fetchStatus.progress = 90;
+        });
+      });
+
+      proc.on("error", (err: NodeJS.ErrnoException) => {
+        console.log(`[FETCH] spawn error: ${err.message}`);
+        if (err.code === "ENOENT") {
+          return tryPython(index + 1);
         }
-      );
+        fetchStatus = { state: "error", message: `Spawn error: ${err.message}`, progress: 0 };
+        reject(err);
+      });
+
+      proc.on("close", (code: number | null) => {
+        console.log(`[FETCH] Python exited with code ${code}`);
+        console.log(`[FETCH] stdout length: ${stdout.length}`);
+        console.log(`[FETCH] stderr (last 500): ${stderr.slice(-500)}`);
+
+        if (code !== 0) {
+          // Python crashed — include stderr in the error message
+          const errMsg = stderr.slice(-300) || `Process exited with code ${code}`;
+          fetchStatus = { state: "error", message: `Python error: ${errMsg}`, progress: 0 };
+          return reject(new Error(errMsg));
+        }
+
+        try {
+          const data = JSON.parse(stdout);
+          const stocks: StockData[] = data.stocks || [];
+          fetchStatus = {
+            state: "done",
+            message: `Fetched ${stocks.length} stocks`,
+            progress: 100,
+          };
+          resolve(stocks);
+        } catch (e) {
+          const parseErr = `Failed to parse Python output. stdout[0:200]: ${stdout.slice(0, 200)}`;
+          console.log(`[FETCH] ${parseErr}`);
+          fetchStatus = { state: "error", message: parseErr, progress: 0 };
+          reject(new Error(parseErr));
+        }
+      });
+
+      // 5 minute timeout
+      setTimeout(() => {
+        try { proc.kill(); } catch {}
+        fetchStatus = { state: "error", message: "Fetch timed out after 5 minutes", progress: 0 };
+        reject(new Error("Timeout"));
+      }, 300_000);
     }
 
     tryPython(0);
