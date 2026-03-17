@@ -122,12 +122,12 @@ function fetchLiveData(region: string = "ALL"): Promise<StockData[]> {
         }
       });
 
-      // 5 minute timeout
+      // 10 minute timeout
       setTimeout(() => {
         try { proc.kill(); } catch {}
-        fetchStatus = { state: "error", message: "Fetch timed out after 5 minutes", progress: 0 };
+        fetchStatus = { state: "error", message: "Fetch timed out after 10 minutes", progress: 0 };
         reject(new Error("Timeout"));
-      }, 300_000);
+      }, 600_000);
     }
 
     tryPython(0);
