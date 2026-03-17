@@ -18,7 +18,11 @@ from datetime import datetime, timezone
 # CONFIG
 # ──────────────────────────────────────────────────────────────────────
 MAX_STOCKS_PER_REGION = 100
-EXCLUDED_SECTORS = {"Utilities", "Financial Services", "Financial"}
+# Only include these sectors (Yahoo Finance labels)
+# "Consumer Cyclical" = Consumer Discretionary (leisure, retail, hotels, restaurants, autos)
+# "Industrials" = Transport (airlines, railroads, logistics, shipping)
+INCLUDED_SECTORS = {"Consumer Cyclical", "Industrials"}
+EXCLUDED_SECTORS = set()  # not used when INCLUDED_SECTORS is set
 MIN_MARKET_CAP = 1_000_000_000
 MAX_MARKET_CAP = 50_000_000_000
 MIN_PRICE = 0.10
@@ -87,7 +91,7 @@ def get_universe_tickers(country_codes, region_label):
                 for item in quotes:
                     sym = item.get('symbol', '')
                     sector = item.get('sectorDisp', '') or item.get('sector', '')
-                    if sym and sector not in EXCLUDED_SECTORS:
+                    if sym and (not INCLUDED_SECTORS or sector in INCLUDED_SECTORS):
                         tickers_for_country.append(sym)
                 if len(quotes) < 25:
                     break
@@ -232,7 +236,7 @@ def fetch_stock_data(ticker_sym, region_label):
             return None
 
         sector = info.get('sectorDisp', '') or info.get('sector', '')
-        if sector in EXCLUDED_SECTORS:
+        if INCLUDED_SECTORS and sector not in INCLUDED_SECTORS:
             return None
 
         market_cap = info.get('marketCap')
