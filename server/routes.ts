@@ -53,6 +53,8 @@ function fetchLiveData(region: string = "ALL"): Promise<StockData[]> {
         return reject(new Error("Python not found"));
       }
 
+      console.log(`[FETCH] Trying ${pythonPaths[index]} ${pythonScript} ${region}`);
+      console.log(`[FETCH] cwd: ${path.join(__dirname, "..")}`);
       const proc = execFile(
         pythonPaths[index],
         [pythonScript, region],
@@ -62,6 +64,8 @@ function fetchLiveData(region: string = "ALL"): Promise<StockData[]> {
           cwd: path.join(__dirname, ".."),
         },
         (error, stdout, stderr) => {
+          console.log(`[FETCH] stderr: ${stderr?.slice(0, 500)}`);
+          console.log(`[FETCH] stdout length: ${stdout?.length}, error: ${error?.message}`);
           // Log progress from stderr
           if (stderr) {
             const lines = stderr.split("\n").filter(Boolean);
