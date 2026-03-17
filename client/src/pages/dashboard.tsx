@@ -54,6 +54,7 @@ import {
   Menu,
   X,
   SlidersHorizontal,
+  History,
 } from "lucide-react";
 import type { StockData } from "@shared/schema";
 
@@ -62,6 +63,26 @@ interface FetchStatus {
   message: string;
   progress: number;
 }
+
+interface BacktestTier {
+  label: string;
+  color: string;
+  count: number;
+  avg13W: number | null;
+  avg26W: number | null;
+  avg52W: number | null;
+  median13W: number | null;
+  median26W: number | null;
+  median52W: number | null;
+  pctPositive13W: number | null;
+  pctPositive26W: number | null;
+  pctPositive52W: number | null;
+  bestStock: { ticker: string; return52W: number } | null;
+  worstStock: { ticker: string; return52W: number } | null;
+  stocks: Array<{ ticker: string; name: string; bucket: number; ret13W: number | null; ret26W: number | null; ret52W: number | null }>;
+}
+
+type BacktestData = Record<string, BacktestTier>;
 
 type SortKey = keyof StockData;
 type SortDir = "asc" | "desc";
@@ -310,6 +331,10 @@ export default function Dashboard() {
     queryKey: ["/api/stats/buckets", `?region=${region}`],
   });
 
+  const { data: backtestData } = useQuery<BacktestData>({
+    queryKey: ["/api/backtest"],
+  });
+
   const rescoreMutation = useMutation({
     mutationFn: async (newWeights: typeof weights) => {
       const res = await apiRequest("POST", "/api/rescore", {
@@ -437,6 +462,21 @@ export default function Dashboard() {
         { factor: "Sentiment", value: selectedStock.sentimentScore ?? 0, fullMark: 100 },
       ]
     : [];
+
+  const [showBacktest, setShowBacktest] = useState(false);
+
+  const backtestChartData = useMemo(() => {
+    if (!backtestData) return [];
+    return ["13W", "26W", "52W"].map((period) => {
+      const key = `avg${period}` as "avg13W" | "avg26W" | "avg52W";
+      return {
+        period,
+        Top: backtestData.top?.[key] !== null ? Number((backtestData.top[key] ?? 0).toFixed(1)) : 0,
+        Middle: backtestData.mid?.[key] !== null ? Number((backtestData.mid[key] ?? 0).toFixed(1)) : 0,
+        Bottom: backtestData.bottom?.[key] !== null ? Number((backtestData.bottom[key] ?? 0).toFixed(1)) : 0,
+      };
+    });
+  }, [backtestData]);
 
   const SortIcon = ({ column }: { column: SortKey }) => {
     if (sortKey !== column) return <ArrowUpDown className="h-3 w-3 opacity-30" />;
@@ -724,6 +764,156 @@ export default function Dashboard() {
               </CardContent>
             </Card>
           </div>
+
+          {/* Backtest: Bucket Performance Comparison */}
+          <Card>
+            <CardHeader className="pb-2 px-3 lg:px-6">
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-sm font-medium flex items-center gap-2">
+                  <History className="h-4 w-4 text-muted-foreground" />
+                  Backtest — Bucket Performance
+                </CardTitle>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setShowBacktest(!showBacktest)}
+                  data-testid="button-toggle-backtest"
+                  className="text-xs"
+                >
+                  {showBacktest ? (
+                    <><ChevronUp className="h-3 w-3 mr-1" />Hide</>
+                  ) : (
+                    <><ChevronDown className="h-3 w-3 mr-1" />Show</>
+                  )}
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">
+                How stocks currently in each bucket tier performed over the past 13, 26, and 52 weeks
+              </p>
+            </CardHeader>
+            {showBacktest && backtestData && (
+              <CardContent className="px-3 lg:px-6 space-y-6">
+                {/* Grouped Bar Chart — Avg Returns by Tier */}
+                <div>
+                  <h4 className="text-xs font-medium text-muted-foreground mb-2">Average Return by Tier (%)</h4>
+                  <div className="h-56 lg:h-72">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={backtestChartData} barCategoryGap="20%">
+                        <CartesianGrid strokeDasharray="3 3" className="opacity-20" />
+                        <XAxis dataKey="period" tick={{ fontSize: 12 }} />
+                        <YAxis tick={{ fontSize: 11 }} tickFormatter={(v: number) => `${v}%`} />
+                        <RechartsTooltip
+                          contentStyle={{
+                            backgroundColor: "hsl(var(--card))",
+                            border: "1px solid hsl(var(--border))",
+                            borderRadius: "6px",
+                            fontSize: 12,
+                          }}
+                          formatter={(value: number, name: string) => [`${value.toFixed(1)}%`, `${name} Buckets`]}
+                        />
+                        <Legend wrapperStyle={{ fontSize: 11 }} />
+                        <Bar dataKey="Top" fill="hsl(150, 50%, 42%)" radius={[3, 3, 0, 0]} />
+                        <Bar dataKey="Middle" fill="hsl(40, 50%, 55%)" radius={[3, 3, 0, 0]} />
+                        <Bar dataKey="Bottom" fill="hsl(0, 70%, 55%)" radius={[3, 3, 0, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+
+                {/* Stats Table */}
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs" data-testid="table-backtest">
+                    <thead>
+                      <tr className="border-b border-border text-muted-foreground">
+                        <th className="text-left py-2 px-2 font-medium">Tier</th>
+                        <th className="text-left py-2 px-2 font-medium">Stocks</th>
+                        <th className="text-right py-2 px-2 font-medium">Avg 13W</th>
+                        <th className="text-right py-2 px-2 font-medium">Avg 26W</th>
+                        <th className="text-right py-2 px-2 font-medium">Avg 52W</th>
+                        <th className="text-right py-2 px-2 font-medium hidden sm:table-cell">Med 52W</th>
+                        <th className="text-right py-2 px-2 font-medium hidden sm:table-cell">% Positive 52W</th>
+                        <th className="text-right py-2 px-2 font-medium hidden lg:table-cell">Best (52W)</th>
+                        <th className="text-right py-2 px-2 font-medium hidden lg:table-cell">Worst (52W)</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(["top", "mid", "bottom"] as const).map((key) => {
+                        const tier = backtestData[key];
+                        if (!tier) return null;
+                        return (
+                          <tr key={key} className="border-b border-border/50">
+                            <td className="py-2 px-2">
+                              <div className="flex items-center gap-1.5">
+                                <div
+                                  className="w-2.5 h-2.5 rounded-sm shrink-0"
+                                  style={{ backgroundColor: tier.color }}
+                                />
+                                <span className="font-medium">{tier.label}</span>
+                              </div>
+                            </td>
+                            <td className="py-2 px-2 font-mono tabular-nums">{tier.count}</td>
+                            <td className={`py-2 px-2 text-right font-mono tabular-nums ${(tier.avg13W ?? 0) >= 0 ? "text-green-500" : "text-red-500"}`}>
+                              {tier.avg13W !== null ? `${tier.avg13W > 0 ? "+" : ""}${tier.avg13W.toFixed(1)}%` : "—"}
+                            </td>
+                            <td className={`py-2 px-2 text-right font-mono tabular-nums ${(tier.avg26W ?? 0) >= 0 ? "text-green-500" : "text-red-500"}`}>
+                              {tier.avg26W !== null ? `${tier.avg26W > 0 ? "+" : ""}${tier.avg26W.toFixed(1)}%` : "—"}
+                            </td>
+                            <td className={`py-2 px-2 text-right font-mono tabular-nums ${(tier.avg52W ?? 0) >= 0 ? "text-green-500" : "text-red-500"}`}>
+                              {tier.avg52W !== null ? `${tier.avg52W > 0 ? "+" : ""}${tier.avg52W.toFixed(1)}%` : "—"}
+                            </td>
+                            <td className={`py-2 px-2 text-right font-mono tabular-nums hidden sm:table-cell ${(tier.median52W ?? 0) >= 0 ? "text-green-500" : "text-red-500"}`}>
+                              {tier.median52W !== null ? `${tier.median52W > 0 ? "+" : ""}${tier.median52W.toFixed(1)}%` : "—"}
+                            </td>
+                            <td className="py-2 px-2 text-right font-mono tabular-nums hidden sm:table-cell">
+                              {tier.pctPositive52W !== null ? `${tier.pctPositive52W.toFixed(0)}%` : "—"}
+                            </td>
+                            <td className="py-2 px-2 text-right hidden lg:table-cell">
+                              {tier.bestStock ? (
+                                <span className="text-green-500 font-mono tabular-nums">
+                                  {tier.bestStock.ticker} +{tier.bestStock.return52W.toFixed(1)}%
+                                </span>
+                              ) : "—"}
+                            </td>
+                            <td className="py-2 px-2 text-right hidden lg:table-cell">
+                              {tier.worstStock ? (
+                                <span className="text-red-500 font-mono tabular-nums">
+                                  {tier.worstStock.ticker} {tier.worstStock.return52W.toFixed(1)}%
+                                </span>
+                              ) : "—"}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Spread summary */}
+                {backtestData.top && backtestData.bottom && (
+                  <div className="rounded-lg border border-border/50 bg-muted/30 p-3 flex flex-col sm:flex-row sm:items-center gap-3">
+                    <div className="flex-1">
+                      <p className="text-xs font-medium mb-1">Top vs Bottom Spread (52W avg return)</p>
+                      <div className="flex items-center gap-2">
+                        <span className="text-lg font-semibold font-mono tabular-nums text-primary">
+                          {backtestData.top.avg52W !== null && backtestData.bottom.avg52W !== null
+                            ? `${((backtestData.top.avg52W ?? 0) - (backtestData.bottom.avg52W ?? 0) > 0 ? "+" : "")}${((backtestData.top.avg52W ?? 0) - (backtestData.bottom.avg52W ?? 0)).toFixed(1)}pp`
+                            : "—"}
+                        </span>
+                        <span className="text-xs text-muted-foreground">
+                          Top {backtestData.top.avg52W !== null ? `${backtestData.top.avg52W > 0 ? "+" : ""}${backtestData.top.avg52W.toFixed(1)}%` : "—"}
+                          {" vs "}
+                          Bottom {backtestData.bottom.avg52W !== null ? `${backtestData.bottom.avg52W > 0 ? "+" : ""}${backtestData.bottom.avg52W.toFixed(1)}%` : "—"}
+                        </span>
+                      </div>
+                    </div>
+                    <p className="text-[10px] text-muted-foreground max-w-xs">
+                      Based on historical price changes of stocks currently in each bucket. This is not a true backtest — it shows how today's bucket members performed over past periods, not how bucket assignments predicted future returns.
+                    </p>
+                  </div>
+                )}
+              </CardContent>
+            )}
+          </Card>
 
           {/* Rankings — Desktop Table */}
           <Card className="hidden lg:block">
