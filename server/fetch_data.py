@@ -101,7 +101,7 @@ def get_universe_tickers(country_codes, region_label):
                 for item in quotes:
                     sym = item.get('symbol', '')
                     sector = item.get('sectorDisp', '') or item.get('sector', '')
-                    if sym and (not INCLUDED_SECTORS or sector in INCLUDED_SECTORS):
+                    if sym:  # sector filtering done at API level via EquityQuery
                         tickers_for_country.append(sym)
                 if len(quotes) < 25:
                     break
@@ -246,7 +246,9 @@ def fetch_stock_data(ticker_sym, region_label):
             return None
 
         sector = info.get('sectorDisp', '') or info.get('sector', '')
-        if INCLUDED_SECTORS and sector not in INCLUDED_SECTORS:
+        # Sector filtering is handled by the EquityQuery in get_universe_tickers
+        # Only skip if sector is in the hard-exclude list (empty by default)
+        if EXCLUDED_SECTORS and sector in EXCLUDED_SECTORS:
             return None
 
         market_cap = info.get('marketCap')
