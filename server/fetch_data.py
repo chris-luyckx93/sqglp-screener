@@ -22,7 +22,7 @@ from datetime import datetime, timezone
 # ──────────────────────────────────────────────────────────────────────
 # CONFIG
 # ──────────────────────────────────────────────────────────────────────
-MAX_STOCKS_PER_REGION = 250  # fetch more to compensate for sector filtering
+MAX_STOCKS_PER_REGION = 150  # fewer candidates = faster sector-filtered fetch
 # Only include these sectors (Yahoo Finance labels)
 # "Consumer Cyclical" = Consumer Discretionary (leisure, retail, hotels, restaurants, autos)
 # "Industrials" = Transport (airlines, railroads, logistics, shipping)
