@@ -24,7 +24,7 @@ MAX_STOCKS_PER_REGION = 100
 INCLUDED_SECTORS = {"Consumer Cyclical", "Industrials"}
 EXCLUDED_SECTORS = set()  # not used when INCLUDED_SECTORS is set
 MIN_MARKET_CAP = 1_000_000_000
-MAX_MARKET_CAP = 300_000_000_000
+MAX_MARKET_CAP = 50_000_000_000
 MIN_PRICE = 0.10
 MIN_AVG_VOLUME = 10_000
 
@@ -76,13 +76,23 @@ def get_universe_tickers(country_codes, region_label):
 
     for code in country_codes:
         try:
-            q = EquityQuery('and', [
+            filters = [
                 EquityQuery('gt', ['intradaymarketcap', MIN_MARKET_CAP]),
                 EquityQuery('lt', ['intradaymarketcap', MAX_MARKET_CAP]),
                 EquityQuery('gt', ['intradayprice', MIN_PRICE]),
                 EquityQuery('gt', ['avgdailyvol3m', MIN_AVG_VOLUME]),
                 EquityQuery('eq', ['region', code]),
-            ])
+            ]
+            # Add sector filter if INCLUDED_SECTORS is set
+            if INCLUDED_SECTORS:
+                sector_list = list(INCLUDED_SECTORS)
+                if len(sector_list) == 1:
+                    filters.append(EquityQuery('eq', ['sector', sector_list[0]]))
+                else:
+                    filters.append(EquityQuery('or', [
+                        EquityQuery('eq', ['sector', s]) for s in sector_list
+                    ]))
+            q = EquityQuery('and', filters)
 
             tickers_for_country = []
             for offset in range(0, 500, 25):
